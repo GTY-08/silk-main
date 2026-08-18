@@ -1,7 +1,5 @@
-// src/App.tsx
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import TabBar from '@/components/TabBar'
-import Feed from '@/components/Feed'
 import Write from '@/components/Write'
 import Explore from '@/components/Explore'
 import Login from '@/components/Login'
@@ -13,99 +11,84 @@ import Home from '@/components/Home'
 import { onAuthStateChanged, User } from 'firebase/auth'
 import { auth } from '@/lib/firebase'
 
-type Tab = 'home' | 'profile' | 'explore'
-type Route = Tab | 'write' | 'login' | 'signup' | 'history'
+export type Route = 'home' | 'profile' | 'explore' | 'write' | 'login' | 'signup' | 'history'
 
 const parseHash = (): Route => {
-  const h = (location.hash || '#home').slice(1)
-  const allow: Route[] = ['home', 'profile', 'explore', 'write', 'login', 'signup', 'history']
-  return (allow as readonly string[]).includes(h) ? (h as Route) : 'home'
+  const hash = (location.hash || '#home').slice(1)
+  const routes: Route[] = ['home', 'profile', 'explore', 'write', 'login', 'signup', 'history']
+  return routes.includes(hash as Route) ? (hash as Route) : 'home'
 }
 
-const isTab = (r: Route): r is Tab =>
-  r === 'home' || r === 'profile' || r === 'explore'
-
 export default function App() {
-  const [route, setRoute] = useState<Route>(parseHash())
-  const [user, setUser] = useState<User | null>(null)
-  const [authReady, setAuthReady] = useState(false)
+  const [route, setRoute] = useState<Route>(parseHash())
+  const [user, setUser] = useState<User | null>(null)
+  const [authReady, setAuthReady] = useState(false)
+  const [introSeen, setIntroSeen] = useState(
+    () => sessionStorage.getItem('silk_intro_seen') === '1',
+  )
 
-  // 인증 상태 구독
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, u => {
-      setUser(u)
-      setAuthReady(true)
-    })
-    return () => unsub()
-  }, [])
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, currentUser => {
+      setUser(currentUser)
+      setAuthReady(true)
+    })
+    return unsubscribe
+  }, [])
 
-  // 해시 라우팅
-  useEffect(() => {
-    const onHash = () => setRoute(parseHash())
-    window.addEventListener('hashchange', onHash)
-    return () => window.removeEventListener('hashchange', onHash)
-  }, [])
+  useEffect(() => {
+    const handleHash = () => setRoute(parseHash())
+    window.addEventListener('hashchange', handleHash)
+    return () => window.removeEventListener('hashchange', handleHash)
+  }, [])
 
-  // nextHash 로직: 인증 상태에 따라 강제 이동 경로 결정
-  const nextHash = (() => {
-    if (!authReady) return '#login'
+  useEffect(() => {
+    if (!authReady) return
+    if (user && (route === 'login' || route === 'signup')) location.hash = '#home'
+    if (!user && route !== 'login' && route !== 'signup') location.hash = '#login'
+  }, [authReady, route, user])
 
-    if (user) {
-      if (route === 'login' || route === 'signup') {
-        return '#home' 
-      }
-      return `#${route}`
-    }
-    
-    if (route !== 'login' && route !== 'signup') {
-      return '#login'
-    }
-    return `#${route}`
-  })();
+  const finishIntro = useCallback(() => {
+    sessionStorage.setItem('silk_intro_seen', '1')
+    setIntroSeen(true)
+  }, [])
 
+  const nextHash = !authReady || !user ? '#login' : `#${route}`
 
-  // 본문 렌더 로직: 인증 상태에 따라 렌더링되는 컴포넌트를 분리
-  let content: React.ReactNode = null
-  
-  if (!authReady) {
-    content = <div className="grid place-items-center h-[70vh] text-sm text-gray-500">로딩중…</div>
-  } else if (user) {
-    // 로그인 상태: 모든 인증 필요 페이지 접근 가능
-    content = (
-      <>
-        {route === 'home' && <Home />}
-        {route === 'profile' && <Profile />}
-        {route === 'explore' && <Explore />}
-        {route === 'write' && <Write />}
-        {route === 'history' && <History />}
-      </>
-    )
-  } else {
-    // 로그아웃 상태: 로그인/회원가입 페이지만 렌더링
-    content = (
-      <>
-        {route === 'login' && <Login />}
-        {route === 'signup' && <Signup />}
-        {route !== 'login' && route !== 'signup' && (
-          <div className="grid place-items-center h-[70vh] text-sm text-red-500">로그인이 필요합니다.</div>
-        )}
-      </>
-    )
-  }
+  let content: React.ReactNode
+  if (!authReady) {
+    content = (
+      <div className="grid min-h-screen place-items-center">
+        <div className="flex items-center gap-3 text-sm font-medium text-slate-500">
+          <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-violet-500" />
+          불러오는 중
+        </div>
+      </div>
+    )
+  } else if (user) {
+    content = (
+      <>
+        {route === 'home' && <Home />}
+        {route === 'profile' && <Profile />}
+        {route === 'explore' && <Explore />}
+        {route === 'write' && <Write />}
+        {route === 'history' && <History />}
+      </>
+    )
+  } else {
+    content = (
+      <>
+        {route === 'signup' ? <Signup /> : <Login />}
+      </>
+    )
+  }
 
-  const shouldShowTabBar = authReady && user && isTab(route);
-  const currentTab = isTab(route) ? route : 'home';
-
-
-  return (
-    <div className="min-h-screen bg-gray-50">
-      <IntroSplash mode="auto" nextHash={nextHash} /> 
-
-      <main className="max-w-5xl mx-auto px-4 py-4">
-        {content}
-      </main>
-
-      {shouldShowTabBar && <TabBar current={currentTab} />}
-    </div>
-  )
+  return (
+    <div className="min-h-screen bg-[#f7f7fb] text-slate-950">
+      {!introSeen && <IntroSplash mode="auto" nextHash={nextHash} onDone={finishIntro} />}
+      {authReady && user && <TabBar current={route} />}
+      <main className={authReady && user ? 'min-h-screen pb-24 pt-16 md:pb-12 md:pt-20' : ''}>
+        {content}
+      </main>
+    </div>
+  )
 }

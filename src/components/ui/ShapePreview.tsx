@@ -20,11 +20,6 @@ type Props = {
   className?: string
 }
 
-/**
- * 배경은 그리지 않는다.
- * 도형 내부만 color로 채운다.
- * 호환: 'wave'는 면 채우기가 어려워 렌더 단계에서 'diamond'로 매핑한다.
- */
 const ShapePreview: React.FC<Props> = ({
   shape = 'square',
   color = '#7777ee',
@@ -41,7 +36,7 @@ const ShapePreview: React.FC<Props> = ({
   // square
   if (k === 'square') {
     return (
-      <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} className={className} role="img" aria-label="square">
+      <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} className={className} role="img" aria-label="사각형">
         <rect x={pad} y={pad} width={s - pad * 2} height={s - pad * 2} rx={8} ry={8} fill={color} stroke={stroke} />
       </svg>
     )
@@ -51,7 +46,7 @@ const ShapePreview: React.FC<Props> = ({
   if (k === 'circle') {
     const r = (s - pad * 2) / 2
     return (
-      <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} className={className} role="img" aria-label="circle">
+      <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} className={className} role="img" aria-label="원">
         <circle cx={s / 2} cy={s / 2} r={r} fill={color} stroke={stroke} />
       </svg>
     )
@@ -63,7 +58,7 @@ const ShapePreview: React.FC<Props> = ({
     const p2 = `${s - pad},${s - pad}`
     const p3 = `${pad},${s - pad}`
     return (
-      <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} className={className} role="img" aria-label="triangle">
+      <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} className={className} role="img" aria-label="삼각형">
         <polygon points={`${p1} ${p2} ${p3}`} fill={color} stroke={stroke} />
       </svg>
     )
@@ -74,7 +69,7 @@ const ShapePreview: React.FC<Props> = ({
     const cx = s / 2, cy = s / 2, r = (s - pad * 2) / 2
     const pts = `${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`
     return (
-      <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} className={className} role="img" aria-label="diamond">
+      <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} className={className} role="img" aria-label="다이아">
         <polygon points={pts} fill={color} stroke={stroke} />
       </svg>
     )
@@ -94,7 +89,7 @@ const ShapePreview: React.FC<Props> = ({
       pts.push(`${x},${y}`)
     }
     return (
-      <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} className={className} role="img" aria-label="star">
+      <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} className={className} role="img" aria-label="별">
         <polygon points={pts.join(' ')} fill={color} stroke={stroke} />
       </svg>
     )
@@ -113,7 +108,7 @@ const ShapePreview: React.FC<Props> = ({
       Z
     `
     return (
-      <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} className={className} role="img" aria-label="heart">
+      <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} className={className} role="img" aria-label="하트">
         <path d={path} fill={color} stroke={stroke} />
       </svg>
     )
@@ -132,7 +127,7 @@ const ShapePreview: React.FC<Props> = ({
       Z
     `
     return (
-      <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} className={className} role="img" aria-label="droplet">
+      <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} className={className} role="img" aria-label="물방울">
         <path d={path} fill={color} stroke={stroke} />
       </svg>
     )
@@ -140,7 +135,7 @@ const ShapePreview: React.FC<Props> = ({
 
   // fallback: square
   return (
-    <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} className={className} role="img" aria-label="square">
+    <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} className={className} role="img" aria-label="사각형">
       <rect x={pad} y={pad} width={s - pad * 2} height={s - pad * 2} rx={8} ry={8} fill={color} stroke={stroke} />
     </svg>
   )
