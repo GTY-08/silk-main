@@ -1,193 +1,82 @@
-// src/components/History.tsx
-'use client'
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useState } from 'react'
+import { equalTo, limitToLast, onValue, orderByChild, query, ref } from 'firebase/database'
 import { onAuthStateChanged } from 'firebase/auth'
 import { auth, rtdb } from '@/lib/firebase'
-import {
-  ref as dbRef,
-  query,
-  orderByChild,
-  equalTo,
-  limitToLast,
-  onValue,
-} from 'firebase/database'
-import ShapePreview from '@/components/ui/ShapePreview' // 프로젝트 경로에 맞게 조정
+import ShapePreview from '@/components/ui/ShapePreview'
 import DetailModal from '@/components/DetailModal'
+import { emotionName } from '@/utils/displayNames'
 
 type Emotion = {
   id: string
-  userId?: string
+  authorName?: string
   color?: string
   shape?: string
   sound?: string
   label?: string
   score?: number
-  timestamp?: number
+  timestamp?: number | string
   lat?: number
   lng?: number
+  likes?: number
 }
 
-// timestamp → number(ms) 정규화
-function normalizeTs(t: unknown): number {
-  if (typeof t === 'number') return t
-  if (typeof t === 'string') {
-    if (/^\d+$/.test(t)) {
-      const n = Number(t)
-      return n < 2_000_000_000 ? n * 1000 : n
-    }
-    const p = Date.parse(t)
-    return Number.isFinite(p) ? p : 0
+function timestamp(value: number | string | undefined) {
+  if (typeof value === 'number') return value < 2_000_000_000 ? value * 1000 : value
+  if (typeof value === 'string') {
+    if (/^\d+$/.test(value)) return timestamp(Number(value))
+    const parsed = Date.parse(value)
+    return Number.isFinite(parsed) ? parsed : 0
   }
   return 0
 }
 
-export default function History() {
+export default function HistoryTimeline() {
   const [uid, setUid] = useState<string | null>(null)
   const [items, setItems] = useState<Emotion[]>([])
   const [loading, setLoading] = useState(true)
-  const [err, setErr] = useState<string>('')
-
-  // 상세 모달
-  const [open, setOpen] = useState(false)
+  const [error, setError] = useState('')
   const [current, setCurrent] = useState<Emotion | null>(null)
 
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      if (!u) {
-        location.hash = '#login'
-        return
-      }
-      setUid(u.uid)
-    })
-    return () => unsub()
-  }, [])
+  useEffect(() => onAuthStateChanged(auth, user => {
+    if (!user) location.hash = '#login'
+    else setUid(user.uid)
+  }), [])
 
   useEffect(() => {
     if (!uid) return
-    setLoading(true)
-    const q = query(
-      dbRef(rtdb, 'emotions'),
-      orderByChild('userId'),
-      equalTo(uid),
-      limitToLast(500)
-    )
-    const off = onValue(
-      q,
-      (snap) => {
-        const list: Emotion[] = []
-        snap.forEach((c) => {
-          list.push(c.val() as Emotion)
-        })
-
-        const safe = list
-          .map((v) => ({
-            ...v,
-            id: (v as any).id,
-            userId: v.userId ?? 'anonymous',
-            color: v.color ?? '#eeeeee',
-            shape: v.shape ?? 'square',
-            sound: v.sound ?? '-',
-            timestamp: normalizeTs((v as any)?.timestamp),
-          }))
-          .filter((v) => (v.timestamp as number) > 0)
-          .sort((a, b) => (b.timestamp as number) - (a.timestamp as number))
-
-        setItems(safe)
-        setLoading(false)
-      },
-      (e) => {
-        setErr(e?.message || '히스토리를 불러오지 못했습니다.')
-        setLoading(false)
-      }
-    )
-    return () => off()
+    return onValue(query(ref(rtdb, 'emotions'), orderByChild('userId'), equalTo(uid), limitToLast(500)), snapshot => {
+      const next: Emotion[] = []
+      snapshot.forEach(child => {
+        const value = child.val() as Emotion
+        next.push({ ...value, id: child.key || value.id, timestamp: timestamp(value.timestamp) })
+      })
+      setItems(next.filter(item => Number(item.timestamp) > 0).sort((a, b) => Number(b.timestamp) - Number(a.timestamp)))
+      setLoading(false)
+    }, reason => {
+      console.error(reason)
+      setError('기록을 불러오지 못했어요. 새로고침해주세요.')
+      setLoading(false)
+    })
   }, [uid])
 
-  // 날짜별 그룹
-  const grouped = useMemo(() => {
-    const map = new Map<string, Emotion[]>()
-    for (const it of items) {
-      const d = new Date(it.timestamp as number)
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
-        d.getDate()
-      ).padStart(2, '0')}`
-      if (!map.has(key)) map.set(key, [])
-      map.get(key)!.push(it)
-    }
-    // 최신 날짜가 위로
-    return Array.from(map.entries()).sort(
-      (a, b) => new Date(b[0]).getTime() - new Date(a[0]).getTime()
-    )
-  }, [items])
-
-  if (loading) return <div className="p-4 text-sm text-black/60">불러오는 중…</div>
-  if (err) return <div className="p-4 text-sm text-red-600">에러: {err}</div>
+  if (loading) return <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{[0,1,2,3,4,5].map(item => <div key={item} className="aspect-square animate-pulse rounded-[24px] bg-slate-200" />)}</div>
+  if (error) return <div className="silk-card p-8 text-center text-sm font-semibold text-rose-600">{error}</div>
+  if (!items.length) return <div className="silk-card grid min-h-64 place-items-center text-center"><div><h3 className="font-black">기록이 없어요</h3><a href="#write" className="mt-3 inline-block text-sm font-black text-violet-700">첫 기록 남기기</a></div></div>
 
   return (
-    <div className="p-4 max-w-5xl mx-auto">
-      <h2 className="text-xl font-bold mb-4">내 히스토리</h2>
-
-      {grouped.length === 0 && (
-        <div className="text-sm text-black/60">기록이 없습니다.</div>
-      )}
-
-      {grouped.map(([date, arr]) => (
-        <section key={date} className="mb-8">
-          <div className="text-sm font-semibold text-black/80 mb-3">{date}</div>
-
-          {/* 날짜별 카드 그리드 */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-4">
-            {arr.map((c) => {
-              const hasLocation = typeof c.lat === 'number' && typeof c.lng === 'number'
-              const timeText = new Date(c.timestamp as number).toLocaleTimeString()
-              return (
-                <button
-                  key={c.id}
-                  onClick={() => {
-                    setCurrent({
-                      ...c,
-                      timestamp: typeof c.timestamp === 'string' ? normalizeTs(c.timestamp) : c.timestamp
-                    })
-                    setOpen(true)
-                  }}
-                  className="text-left rounded-2xl border bg-white shadow-sm hover:shadow-md transition p-3"
-                >
-                  {/* 프리뷰: 배경 흰색, 도형 내부만 사용자 색 */}
-                  <div className="relative h-28 rounded-xl bg-white grid place-items-center">
-                    <ShapePreview
-                      shape={(c.shape as any) ?? 'square'}
-                      color={c.color ?? '#cccccc'}
-                      size={88}
-                    />
-                    <div className="absolute top-2 left-2 text-[11px] px-2 py-0.5 rounded-full bg-black/30 text-white">
-                      {timeText}
-                    </div>
-                    <div className="absolute top-2 right-2 text-black/70 text-base">
-                      {hasLocation ? '📍' : ''}
-                    </div>
-                  </div>
-
-                  {/* 라벨, 점수 등 간단 정보. 좋아요는 표시하지 않음 */}
-                  <div className="mt-2">
-                    <div className="text-sm font-medium truncate">
-                      {c.label ?? 'unknown'}
-                      {typeof c.score === 'number' ? (
-                        <span className="text-black/60"> · {Math.round(c.score * 100)}%</span>
-                      ) : null}
-                    </div>
-                    <div className="text-xs text-black/60 mt-0.5">
-                      {c.shape} · {c.sound}
-                    </div>
-                  </div>
-                </button>
-              )
-            })}
-          </div>
-        </section>
-      ))}
-
-      {/* 상세 모달 */}
-      <DetailModal open={open} item={current} onClose={() => setOpen(false)} />
-    </div>
+    <>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        {items.map(item => (
+          <button key={item.id} onClick={() => setCurrent(item)} className="group relative aspect-square overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-xl" style={{ background: `linear-gradient(145deg, #fff, ${item.color || '#8b5cf6'}1f)` }}>
+            <div className="grid h-full place-items-center transition duration-500 group-hover:scale-110"><ShapePreview shape={(item.shape as any) || 'square'} color={item.color || '#8b5cf6'} size={92} /></div>
+            <div className="absolute inset-x-0 bottom-0 flex items-end justify-between bg-gradient-to-t from-slate-950/75 to-transparent px-3 pb-3 pt-10 text-left text-white">
+              <div><div className="text-xs font-black">{emotionName(item.label)}</div><div className="mt-0.5 text-[10px] font-medium text-white/65">{new Date(Number(item.timestamp)).toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' })}</div></div>
+              <span className="text-xs font-black">♥ {item.likes || 0}</span>
+            </div>
+          </button>
+        ))}
+      </div>
+      <DetailModal open={!!current} item={current as any} onClose={() => setCurrent(null)} />
+    </>
   )
 }
