@@ -1,209 +1,175 @@
-'use client'
-import React, { useEffect, useState, useRef } from 'react'
-import { auth, rtdb } from '@/lib/firebase'
+import React, { useEffect, useRef, useState } from 'react'
 import { onAuthStateChanged } from 'firebase/auth'
-import { ref, push, set } from 'firebase/database'
+import { push, ref, set } from 'firebase/database'
+import { auth, rtdb } from '@/lib/firebase'
 import ShapePreview from '@/components/ui/ShapePreview'
 
-const SHAPES = ['square','circle','triangle','diamond','star','heart','droplet'] as const
-const SOUNDS = ['chime','rain','piano','drum'] as const
-type Shape = typeof SHAPES[number]
-type Sound = typeof SOUNDS[number]
+const SHAPES = ['square', 'circle', 'triangle', 'diamond', 'star', 'heart', 'droplet'] as const
+const SOUNDS = ['chime', 'rain', 'piano', 'drum'] as const
+type Shape = (typeof SHAPES)[number]
+type Sound = (typeof SOUNDS)[number]
 
-const SOUND_MAP: Record<Sound,string> = {
-  chime:'/sounds/chime.mp3',
-  rain:'/sounds/rain.mp3',
-  piano:'/sounds/piano.mp3',
-  drum:'/sounds/drum.mp3',
+const SHAPE_NAMES: Record<Shape, string> = { square: '사각형', circle: '원', triangle: '삼각형', diamond: '다이아', star: '별', heart: '하트', droplet: '물방울' }
+const SOUND_NAMES: Record<Sound, string> = { chime: '맑은 종', rain: '빗소리', piano: '피아노', drum: '드럼' }
+const SOUND_MAP: Record<Sound, string> = { chime: '/sounds/chime.mp3', rain: '/sounds/rain.mp3', piano: '/sounds/piano.mp3', drum: '/sounds/drum.mp3' }
+
+function parsePrediction(text: string) {
+  try {
+    const result = JSON.parse(text)
+    if (typeof result?.prediction === 'string' && Number.isFinite(Number(result?.confidence))) {
+      return { label: result.prediction.toLowerCase(), score: Number(result.confidence), scores: result.probabilities }
+    }
+    const entries = Object.entries(result?.probabilities || result?.scores || {}).filter(([, value]) => Number.isFinite(Number(value))) as [string, number][]
+    entries.sort((a, b) => Number(b[1]) - Number(a[1]))
+    if (entries.length) return { label: entries[0][0].toLowerCase(), score: Number(entries[0][1]), scores: result.probabilities || result.scores }
+  } catch {}
+  return null
 }
 
-// ---------- robust parser ----------
-const toNum = (v:any) => { const n = typeof v==='number'?v:parseFloat(v); return Number.isFinite(n)?n:null }
-function pickFromText(text:string): {label:string|null, score:number|null, scores?:Record<string,number>} {
-  let j:any=null; try{ j = JSON.parse(text) }catch{}
-  // v3: {prediction, confidence, probabilities}
-  if (j && typeof j==='object') {
-    const c = toNum(j?.confidence)
-    if (typeof j?.prediction==='string' && c!=null) {
-      return { label: String(j.prediction).toLowerCase(), score: c, scores: j?.probabilities }
-    }
-    if (j?.probabilities && typeof j.probabilities==='object') {
-      const arr = Object.entries(j.probabilities).map(([k,v])=>[String(k).toLowerCase(), toNum(v) as number]).filter(([,p])=>p!=null) as [string,number][]
-      if (arr.length) { arr.sort((a,b)=>b[1]-a[1]); return { label:arr[0][0], score:arr[0][1], scores:j.probabilities } }
-    }
-  }
-  // v2: {label, score} or {scores:{...}}
-  if (j && typeof j==='object') {
-    const s2 = toNum(j?.score)
-    if (typeof j?.label==='string' && s2!=null) return { label:j.label, score:s2, scores:j?.scores }
-    if (j?.scores && typeof j.scores==='object') {
-      const arr = Object.entries(j.scores).map(([k,v])=>[String(k).toLowerCase(), toNum(v) as number]).filter(([,p])=>p!=null) as [string,number][]
-      if (arr.length) { arr.sort((a,b)=>b[1]-a[1]); return { label:arr[0][0], score:arr[0][1], scores:j.scores } }
-    }
-  }
-  // last-resort regex
-  const lab = /"prediction"\s*:\s*"([A-Za-z_-]+)"/.exec(text)?.[1] || /"label"\s*:\s*"([A-Za-z_-]+)"/.exec(text)?.[1]
-  const sco = /"confidence"\s*:\s*"?(1(?:\.0+)?|0?\.\d+)"?/.exec(text)?.[1] || /"score"\s*:\s*"?(1(?:\.0+)?|0?\.\d+)"?/.exec(text)?.[1]
-  if (lab && sco) return { label: lab.toLowerCase(), score: toNum(sco)! }
-  return { label:null, score:null }
-}
+export default function Write() {
+  const [userId, setUserId] = useState('')
+  const [color, setColor] = useState('#7c5cff')
+  const [shape, setShape] = useState<Shape>('circle')
+  const [sound, setSound] = useState<Sound>('chime')
+  const [geo, setGeo] = useState<{ lat?: number; lng?: number }>({})
+  const [loading, setLoading] = useState(false)
+  const [locationLoading, setLocationLoading] = useState(false)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const [authorName, setAuthorName] = useState(() => localStorage.getItem('silk_authorName') || auth.currentUser?.displayName || auth.currentUser?.email?.split('@')[0] || '')
 
-export default function Write(){
-  const [userId,setUserId] = useState('')
-  const [color,setColor] = useState('#7b7bf5')
-  const [shape,setShape] = useState<Shape>('square')
-  const [sound,setSound] = useState<Sound>('chime')
-  const [loc,setLoc] = useState<{lat?:number;lng?:number}>({})
-  const [loading,setLoading] = useState(false)
-  const audioRef = useRef<HTMLAudioElement|null>(null)
-  const [authorName, setAuthorName] = useState<string>(() => {
-    return localStorage.getItem('silk_authorName') || ''
-  })
+  useEffect(() => onAuthStateChanged(auth, user => {
+    if (!user) window.location.hash = '#login'
+    else setUserId(user.uid)
+  }), [])
 
+  useEffect(() => () => { audioRef.current?.pause() }, [])
 
-  useEffect(()=>onAuthStateChanged(auth,u=>{
-    if(!u) location.hash='#login'
-    else setUserId(u.uid)
-  }),[])
-
-  useEffect(()=>{
-    if(!audioRef.current) audioRef.current = new Audio()
-    return ()=>{ try{ audioRef.current?.pause() }catch{} }
-  },[])
-
-  const onAuthorChange = (v: string) => {
-    setAuthorName(v)
-    localStorage.setItem('silk_authorName', v)
-  }
-  const togglePlay = async ()=>{
-    if(!audioRef.current) return
-    try{
-      if(!audioRef.current.paused){ audioRef.current.pause(); audioRef.current.currentTime=0 }
-      else{
-        const url = SOUND_MAP[sound]
-        if (audioRef.current.src !== url) audioRef.current.src = url
-        await audioRef.current.play()
-      }
-    }catch{ alert('브라우저 자동재생이 차단됨. 한 번 더 누르세요.') }
+  const updateAuthor = (value: string) => {
+    setAuthorName(value)
+    localStorage.setItem('silk_authorName', value)
   }
 
-  const grabLocation = ()=>{
-    if(!navigator.geolocation) return alert('이 브라우저는 위치 권한을 지원하지 않습니다.')
+  const previewSound = async (nextSound: Sound) => {
+    setSound(nextSound)
+    if (!audioRef.current) audioRef.current = new Audio()
+    audioRef.current.pause()
+    audioRef.current.src = SOUND_MAP[nextSound]
+    audioRef.current.currentTime = 0
+    await audioRef.current.play().catch(() => undefined)
+  }
+
+  const grabLocation = () => {
+    if (!navigator.geolocation) return alert('이 브라우저에서는 위치를 사용할 수 없어요.')
+    setLocationLoading(true)
     navigator.geolocation.getCurrentPosition(
-      p=>setLoc({lat:p.coords.latitude,lng:p.coords.longitude}),
-      ()=>alert('위치 권한을 허용해주세요.')
+      position => {
+        setGeo({ lat: position.coords.latitude, lng: position.coords.longitude })
+        setLocationLoading(false)
+      },
+      () => {
+        setLocationLoading(false)
+        alert('위치 권한을 허용해주세요.')
+      },
+      { enableHighAccuracy: true, timeout: 10000 },
     )
   }
 
-  const save = async ()=>{
-    if(!userId) return alert('로그인 후 이용해주세요.')
+  const save = async () => {
+    if (!userId) return alert('로그인이 필요해요.')
     setLoading(true)
-
-    let label:string|null=null, score:number|null=null, scoresRaw:any=null
-    try{
-      const base = (import.meta as any).env?.VITE_AI_BASE ?? ''
+    let prediction: ReturnType<typeof parsePrediction> = null
+    try {
+      const base = String(import.meta.env.VITE_AI_BASE || '').replace(/\/+$/, '')
       if (base) {
-        const url = String(base).replace(/\/+$/,'') + '/predict' // /predict 고정
         try {
-          const res = await fetch(url, {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({ color_hex: color, shape, sound })
+          const response = await fetch(`${base}/predict`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ color_hex: color, shape, sound }),
           })
-          const txt = await res.text()
-          console.log('[AI write]', res.status, url, txt)
-          if (res.ok) {
-            const picked = pickFromText(txt)
-            label = picked.label
-            score = picked.score
-            scoresRaw = picked.scores
-          }
-        } catch (e) {
-          console.warn('AI 예측 실패', e)
+          if (response.ok) prediction = parsePrediction(await response.text())
+        } catch (error) {
+          console.warn('AI 분석을 건너뛰고 기록을 저장합니다.', error)
         }
-      } else {
-        console.warn('VITE_AI_BASE 미설정')
       }
 
-      const id = push(ref(rtdb,'emotions')).key as string
-      const payload:any = {
-        id, userId, color, shape, sound,
-        timestamp: Date.now(), likes: 0,
-        authorName: (authorName || '익명').trim(),
-        ...(loc.lat!=null?{lat:loc.lat}:{ }),
-        ...(loc.lng!=null?{lng:loc.lng}:{ }),
-        ...(label!=null?{label}:{ }),
-        ...(score!=null?{score}:{ }),
-        ...(scoresRaw && typeof scoresRaw==='object' ? {scores:scoresRaw} : {}),
-      }
-      await set(ref(rtdb,`emotions/${id}`), payload)
-      alert('저장 완료')
-    }catch(e){
-      alert('저장 실패')
-      console.error(e)
-    }finally{ setLoading(false) }
+      const id = push(ref(rtdb, 'emotions')).key as string
+      await set(ref(rtdb, `emotions/${id}`), {
+        id,
+        userId,
+        authorName: authorName.trim() || '익명',
+        color,
+        shape,
+        sound,
+        timestamp: Date.now(),
+        likes: 0,
+        ...(typeof geo.lat === 'number' ? { lat: geo.lat } : {}),
+        ...(typeof geo.lng === 'number' ? { lng: geo.lng } : {}),
+        ...(prediction || {}),
+      })
+      window.location.hash = '#home'
+    } catch (error) {
+      console.error(error)
+      alert('저장하지 못했어요. 잠시 후 다시 시도해주세요.')
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
-    <div className="p-4 max-w-3xl mx-auto">
-      <label className="block text-sm font-medium">피드에 표시할 닉네임</label>
-      <input
-        className="w-full mt-2 mb-4 p-3 border rounded-lg"
-        placeholder="예) 홍길동"
-        value={authorName}
-        onChange={(e)=>onAuthorChange(e.target.value)}
-        maxLength={20}
-      />
-      <div className="flex justify-end mb-3">
-        <button onClick={()=>{ location.hash='#profile' }} className="px-3 py-1.5 rounded-xl border border-gray-300 text-sm text-black/70 hover:bg-gray-100">← 나가기</button>
-      </div>
+    <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-8">
+      <header className="mb-6 flex items-center justify-between">
+        <div><h1 className="text-3xl font-black tracking-[-0.04em]">감정 기록</h1></div>
+        <button onClick={() => history.back()} className="rounded-full bg-white px-4 py-2 text-sm font-bold text-slate-500 ring-1 ring-slate-200 transition hover:text-slate-950">취소</button>
+      </header>
 
-      <div className="rounded-2xl bg-white shadow grid place-items-center h-56 mb-4">
-        <ShapePreview shape={shape} color={color} size={140} />
-      </div>
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_420px]">
+        <section className="silk-card relative grid min-h-[440px] place-items-center overflow-hidden p-8 lg:sticky lg:top-24 lg:h-[calc(100vh-8rem)] lg:max-h-[680px]">
+          <div className="absolute inset-0" style={{ background: `radial-gradient(circle at 20% 15%, ${color}35, transparent 38%), linear-gradient(145deg, #fff, ${color}18)` }} />
+          <div className="absolute right-5 top-5 rounded-full bg-white/80 px-3 py-1.5 text-[11px] font-black text-slate-500 shadow-sm backdrop-blur">미리보기</div>
+          <div className="relative text-center">
+            <div className="transition-all duration-500"><ShapePreview shape={shape} color={color} size={220} /></div>
+            <div className="mt-8 inline-flex items-center gap-2 rounded-full bg-white/85 px-4 py-2 text-xs font-black text-slate-700 shadow-lg backdrop-blur"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />{SHAPE_NAMES[shape]} · {SOUND_NAMES[sound]}</div>
+          </div>
+        </section>
 
-      <div className="mb-4">
-        <div className="text-sm font-medium mb-2">색상</div>
-        <input type="color" value={color} onChange={e=>setColor(e.target.value)} className="h-10 w-16 p-0 border rounded" aria-label="color"/>
-      </div>
+        <section className="space-y-4">
+          <div className="silk-card p-5 sm:p-6">
+            <div className="mb-3 flex items-center justify-between"><h2 className="text-lg font-black">작성자</h2><span className="text-xs font-bold text-slate-400">최대 20자</span></div>
+            <input value={authorName} onChange={event => updateAuthor(event.target.value)} maxLength={20} placeholder="표시할 이름" className="w-full rounded-2xl border-0 bg-slate-100 px-4 py-3.5 text-sm font-semibold outline-none ring-violet-200 transition placeholder:text-slate-400 focus:ring-2" />
+          </div>
 
-      <div className="mb-4">
-        <div className="text-sm font-medium mb-2">도형</div>
-        <div className="flex flex-wrap gap-3">
-          {SHAPES.map(s=>(
-            <button key={s} onClick={()=>setShape(s)} className={`p-2 rounded-xl border grid place-items-center ${shape===s?'bg-black/10 border-black':'bg-black border-gray-300'}`} aria-label={s}>
-              <ShapePreview shape={s} color="#ffffff" size={36}/>
-            </button>
-          ))}
-        </div>
-      </div>
+          <div className="silk-card p-5 sm:p-6">
+            <div className="mb-4"><h2 className="text-lg font-black">색</h2></div>
+            <label className="flex cursor-pointer items-center gap-4 rounded-2xl bg-slate-100 p-3">
+              <input type="color" value={color} onChange={event => setColor(event.target.value)} className="h-12 w-12 cursor-pointer overflow-hidden rounded-xl border-0 bg-transparent p-0" aria-label="감정 색상" />
+              <div><div className="text-sm font-black text-slate-800">{color.toUpperCase()}</div><div className="mt-0.5 text-xs font-medium text-slate-400">눌러서 변경</div></div>
+            </label>
+          </div>
 
-      <div className="mb-4">
-        <div className="text-sm font-medium mb-2">소리</div>
-        <div className="flex flex-wrap gap-2">
-          {SOUNDS.map(s=>(
-            <button key={s} onClick={()=>setSound(s)} className={`px-3 py-1.5 rounded-full border ${sound===s?'bg-black text-white':'bg-white'}`}>{s}</button>
-          ))}
-        </div>
-        <div className="mt-2">
-          <button onClick={togglePlay} className="px-3 py-1.5 rounded-xl bg-gray-800 text-white">소리 미리듣기</button>
-          <audio ref={audioRef} className="hidden" />
-        </div>
-      </div>
+          <div className="silk-card p-5 sm:p-6">
+            <div className="mb-4"><h2 className="text-lg font-black">모양</h2></div>
+            <div className="grid grid-cols-4 gap-2">
+              {SHAPES.map(item => <button key={item} onClick={() => setShape(item)} className={`grid min-h-20 place-items-center rounded-2xl border text-[10px] font-black transition ${shape === item ? 'border-slate-950 bg-slate-950 text-white shadow-lg' : 'border-slate-200 bg-white text-slate-500 hover:border-violet-300'}`}><ShapePreview shape={item} color={shape === item ? '#ffffff' : color} size={30} /><span>{SHAPE_NAMES[item]}</span></button>)}
+            </div>
+          </div>
 
-      <div className="mb-4">
-        <div className="text-sm font-medium mb-2">위치</div>
-        <button onClick={grabLocation} className="px-3 py-1.5 rounded-xl border">위치 가져오기</button>
-        {loc.lat!=null && loc.lng!=null ? (
-          <div className="text-xs text-black/60 mt-2">lat {loc.lat}, lng {loc.lng}</div>
-        ) : null}
-      </div>
+          <div className="silk-card p-5 sm:p-6">
+            <div className="mb-4"><h2 className="text-lg font-black">소리</h2></div>
+            <div className="grid grid-cols-2 gap-2">
+              {SOUNDS.map(item => <button key={item} onClick={() => previewSound(item)} className={`flex items-center gap-3 rounded-2xl border p-3 text-left transition ${sound === item ? 'border-violet-600 bg-violet-50 text-violet-700' : 'border-slate-200 text-slate-600 hover:border-violet-200'}`}><span className={`grid h-9 w-9 place-items-center rounded-full ${sound === item ? 'bg-violet-600 text-white' : 'bg-slate-100'}`}>♪</span><span className="text-sm font-black">{SOUND_NAMES[item]}</span></button>)}
+            </div>
+          </div>
 
-      <div className="flex items-center gap-2">
-        <button onClick={save} disabled={loading} className="px-4 py-2 rounded-xl bg-black text-white disabled:opacity-50">저장</button>
-      </div>
+          <div className="silk-card p-5 sm:p-6">
+            <div className="flex items-center justify-between gap-4"><h2 className="text-lg font-black">위치</h2><button onClick={grabLocation} disabled={locationLoading} className="silk-button-soft shrink-0">{locationLoading ? '확인 중' : typeof geo.lat === 'number' ? '위치 추가됨' : '위치 추가'}</button></div>
+          </div>
 
-      <p className="mt-3 text-xs text-black/50">저장 시 AI 분석 결과를 함께 저장합니다.</p>
+          <button onClick={save} disabled={loading} className="w-full rounded-[22px] bg-gradient-to-r from-violet-600 to-indigo-600 px-6 py-4 text-base font-black text-white shadow-xl shadow-violet-200 transition hover:-translate-y-0.5 disabled:opacity-50">{loading ? '분석 중…' : '기록 올리기'}</button>
+          <p className="pb-2 text-center text-xs font-medium leading-5 text-slate-400">피드에 공개됩니다.</p>
+        </section>
+      </div>
+      <audio ref={audioRef} className="hidden" />
     </div>
   )
 }
